@@ -12,13 +12,17 @@ class UserTableSeeder extends Seeder
      */
     public function run(): void
     {
-        $user = User::create([
-            'username' => "admin",
-            'first_name' => "Default",
-            'last_name' => "User",
-            'email' => "admin@clms.com",
-            'phone' => "0000000",
-            'password' => bcrypt("admin")
-        ]);
+        User::firstOrCreate(
+            [
+                'username' => 'admin',
+            ],
+            [
+                'first_name' => 'Default',
+                'last_name'  => 'User',
+                'email'      => 'admin@clms.com',
+                'phone'      => '0000000',
+                'password'   => bcrypt('admin'),
+            ]
+        );
     }
 }

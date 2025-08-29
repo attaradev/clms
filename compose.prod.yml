@@ -1,0 +1,163 @@
+name: clms
+
+# Shared logging config to prevent disk from filling
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  web:
+    container_name: clms-web
+    image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-web:${TAG:-latest}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+    environment:
+      APP_NAME: CLMS
+      BACKEND_API_HOST: http://proxy:80
+      COOKIE_SECURE: "true"
+      NODE_ENV: production
+      SECRET_COOKIE_PASSWORD: ${SECRET_COOKIE_PASSWORD}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`${DOMAIN_NAME}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls.certresolver=le
+      - traefik.http.services.web.loadbalancer.server.port=3000
+    depends_on:
+      proxy:
+        condition: service_started
+    networks: 
+      - clms
+
+  proxy:
+    container_name: clms-proxy
+    image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-proxy:${TAG:-latest}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: 
+      - clms
+
+  api:
+    container_name: clms-api
+    image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-api:${TAG:-latest}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+    env_file:
+      - ./back-end/.env
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: ${APP_URL:-http://localhost:8000}
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_DATABASE: ${DB_DATABASE:-clms}
+      DB_USERNAME: ${DB_USERNAME:-clms}
+      DB_PASSWORD: ${DB_PASSWORD:-clms}
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_CONNECTION: database
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "php -v >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: 
+      - clms
+
+  traefik:
+    container_name: clms-traefik
+    image: traefik:v2.10
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *default-logging
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.traefik.address=:8080
+      - --api.dashboard=true
+      - --ping=true
+      - --ping.entryPoint=traefik
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./letsencrypt:/letsencrypt
+    networks: 
+      - clms
+
+  db:
+    container_name: clms-db
+    image: postgres:16
+    init: true
+    logging: *default-logging
+    environment:
+      - POSTGRES_DB=${DB_DATABASE:-clms}
+      - POSTGRES_USER=${DB_USERNAME:-clms}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-clms}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-clms} -d ${DB_DATABASE:-clms} -h localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: 
+      - clms
+
+  redis:
+    container_name: clms-redis
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    init: true
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: 
+      - clms
+
+volumes:
+  pgdata:
+
+networks:
+  clms:
+    name: clms_prod
+    driver: bridge

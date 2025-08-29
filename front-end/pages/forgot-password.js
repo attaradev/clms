@@ -41,7 +41,7 @@ export default function Index(props) {
                 <div className="min-w-[20vw]">
                     <div className="text-center">
                         <header className="text-6xl text-primary">
-                            Albert System
+                            CLMS System
                         </header>
                         <p className="text-sm my-3">
                             Reset Password

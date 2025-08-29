@@ -53,10 +53,10 @@ export default function Index() {
                 <div className="min-w-[25vw]">
                     <div className="text-center">
                         <div className="text-blue-500 text-8xl  py-2 px-4">
-                            Albert
+                            CLMS
                         </div>
                         <p className="text-center text-gray-900 font-light">
-                            Albert System
+                            CLMS System
                         </p>
                         <p className="text-sm text-gray-500 my-2">
                             Strengthening Systems.

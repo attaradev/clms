@@ -34,7 +34,7 @@ export default function Layout(props) {
                     <ul className="menu p-4 w-64 min-h-full  text-primary ">
                         <li className="mb-10">
                             <div className="text-4xl text-gray-600">
-                                Albert
+                                CLMS
                             </div>
                         </li>
                         <li className={`rounded-lg  ${activeLink === "/" ? 'sidebar-menu-active' : ''}`}>

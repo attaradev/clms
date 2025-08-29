@@ -1,4 +1,4 @@
-.secrets
+.secrets/SECRET_COOKIE_PASSWORD
 **/.env
 **/.DS_Store
 
@@ -8,3 +8,12 @@
 .next/
 .turbo/
 out/
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfplan
+**/outputs.json

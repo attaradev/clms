@@ -1,0 +1,40 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# Environment (do not send secrets)
+.env
+.env.*
+!.env.example
+
+# Node (Laravel Vite)
+node_modules
+npm-debug.log*
+yarn.lock
+pnpm-lock.yaml
+
+# PHP dependencies (we install into a volume at runtime)
+vendor
+
+# Laravel caches & runtime artifacts
+storage/*
+!storage/.gitignore
+bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+# Tests & docs (optional)
+tests
+docs
+
+# OS/IDE
+.DS_Store
+.vscode
+.idea
+*.swp
+
+# Misc
+composer.phar
+
+# dockerfiles
+dockerfiles

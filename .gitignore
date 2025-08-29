@@ -1,0 +1,10 @@
+.secrets
+**/.env
+**/.DS_Store
+
+# Node
+**/node_modules/
+# Next.js
+.next/
+.turbo/
+out/

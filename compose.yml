@@ -1,9 +1,9 @@
 name: clms
 
 services:
-  # --- PHP-FPM (Laravel runtime + Composer on start) ---
-  php:
-    container_name: clms-php
+  # --- Laravel API (PHP-FPM + Composer on start) ---
+  api:
+    container_name: clms-api
     build:
       context: ./back-end
       dockerfile: dockerfiles/php.dockerfile
@@ -53,11 +53,12 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: [clms]
+    networks: 
+      - clms
 
-  # --- Nginx (public API proxy to php-fpm) ---
-  api:
-    container_name: clms-api
+  # --- Nginx (public API reverse proxy to Laravel API) ---
+  proxy:
+    container_name: clms-proxy
     build:
       context: ./back-end/dockerfiles
       dockerfile: nginx.dockerfile
@@ -66,7 +67,7 @@ services:
         GID: ${GID:-1000}
         USER: ${USER:-app}
     depends_on:
-      php:
+      api:
         condition: service_started
     ports:
       - "8000:80"
@@ -74,7 +75,8 @@ services:
       - ./back-end:/var/www/html:ro
       - ./back-end/dockerfiles/nginx:/etc/nginx/conf.d:ro
     restart: unless-stopped
-    networks: [clms]
+    networks: 
+      - clms
 
   # --- Postgres ---
   db:
@@ -94,7 +96,8 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: [clms]
+    networks: 
+      - clms
 
   # --- Redis ---
   redis:
@@ -109,9 +112,10 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: [clms]
+    networks: 
+      - clms
 
-  # --- Next.js web (talks to api at http://api:80) ---
+  # --- Next.js web (talks to proxy at http://proxy:80) ---
   web:
     container_name: clms-web
     build:
@@ -123,16 +127,17 @@ services:
       - ./front-end/.env
     environment:
       - APP_NAME=CLMS
-      - BACKEND_API_HOST=http://api:80
+      - BACKEND_API_HOST=http://proxy:80
       - COOKIE_SECURE=false
       - NODE_ENV=production
     depends_on:
-      api:
+      proxy:
         condition: service_started
     ports:
       - "3000:3000"
     restart: unless-stopped
-    networks: [clms]
+    networks: 
+      - clms
 
 secrets:
   secret_cookie_password:
@@ -145,4 +150,5 @@ volumes:
 
 networks:
   clms:
+    name: clms_dev
     driver: bridge

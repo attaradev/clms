@@ -36,5 +36,4 @@ docs
 # Misc
 composer.phar
 
-# dockerfiles
-dockerfiles
+# dockerfiles (keep in context for image builds)

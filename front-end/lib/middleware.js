@@ -13,10 +13,11 @@ export default async function auth({req, res}) {
     }
 
 
+    // Use Next API bridge for browser-safe calls; avoids Docker-only hostnames leaking to the client
     let configBundle = {
         user: req.session.get('user'),
         apiToken: req.session.get('api_token'),
-        backendUrl: process.env.BACKEND_API_HOST + "/api",
+        backendUrl: "/api/bridge",
         hostUrl: process.env.BACKEND_API_HOST,
         authHeader: {"Authorization": "Bearer " + req.session.get('api_token')}
     }
@@ -46,14 +47,14 @@ export async function unSecureAuth({req, res}) {
     let configBundle = {
         user: req.session.get('user'),
         apiToken: req.session.get('api_token'),
-        backendUrl: process.env.BACKEND_API_HOST + "/api",
+        backendUrl: "/api/bridge",
         authHeader: {"Authorization": "Bearer " + req.session.get('api_token')}
     }
     return {
         props: {
             user: req.session.get('user'),
             apiToken: req.session.get('api_token'),
-            backendUrl: process.env.BACKEND_API_HOST + "/api",
+            backendUrl: "/api/bridge",
             configBundle: configBundle
         },
     }

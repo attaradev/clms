@@ -1,26 +1,26 @@
 import withSession from '@/lib/session'
-import axios from "axios";
+import axios from 'axios'
 
 export default withSession(async (req, res) => {
-    const api_token = req.session.get('api_token');
-    const user = req.session.get('api_token');
+  const apiToken = req.session.get('api_token')
+  const user = req.session.get('user')
 
-    if (!user) {
-        return res.json(401);
-    }
+  if (!user) {
+    return res.status(401).json({ message: 'Not authenticated' })
+  }
 
-    req.session.destroy();
+  try {
+    // Call backend via Nginx (never touch PHP-FPM directly)
+    const url = `${process.env.BACKEND_API_HOST}/api/logout`
+    await axios.post(url, null, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+      validateStatus: () => true,
+    })
+  } catch (e) {
+    // swallow errors – we will still clear local session
+  }
 
-    // also destroy on the server
-    //todo
-    // const response = await axios.post(apiUrl(`logout`), null, {headers: {Authorization: `Bearer ${api_token}`}});
-
-    return res.json({isLoggedIn: false});
-
-    // if (response.status === 200) {
-    //     return res.json({isLoggedIn: false})
-    // }
-    //
-    // res.status(500).json({isLoggedIn: true})
-
+  // Always destroy local session
+  req.session.destroy()
+  return res.json({ isLoggedIn: false })
 })

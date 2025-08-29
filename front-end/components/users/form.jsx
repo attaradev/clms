@@ -72,8 +72,8 @@ export default function Form(props) {
     }
 
     const processStore = async (formData) => {
-        const response = await axios.post(`${config.backendUrl}/users`, formData, {
-            headers: {...config.authHeader, ...{'Content-Type': 'multipart/form-data'}}
+        const response = await axios.post(`${config.backendUrl}/admin/users`, formData, {
+            headers: {...config.authHeader}
         });
 
         if (response.status === 201) {
@@ -83,7 +83,7 @@ export default function Form(props) {
     }
 
     const processUpdate = async (formData) => {
-        const response = await axios.patch(`${config.backendUrl}/users/${props.initData.id}`, formData, {
+        const response = await axios.patch(`${config.backendUrl}/admin/users/${props.initData.id}`, formData, {
             headers: {...config.authHeader,}
         });
 

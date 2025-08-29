@@ -54,7 +54,10 @@ class UserController extends Controller
 
         $user = User::create($data);
 
-        return new UserResource($user);
+        // Return 201 Created to match API contract/tests
+        return (new UserResource($user))
+            ->response()
+            ->setStatusCode(Response::HTTP_CREATED);
     }
 
     /**

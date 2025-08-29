@@ -19,6 +19,7 @@ export default function Settings(props) {
     const [isFetching, setIsFetching] = useState(false);
 
     useEffect(() => {
+        if (!id) return; // avoid fetching with undefined id
         fetchData(id);
     }, [id]);
 

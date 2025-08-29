@@ -124,6 +124,7 @@ services:
     environment:
       - APP_NAME=CLMS
       - BACKEND_API_HOST=http://api:80
+      - COOKIE_SECURE=false
       - NODE_ENV=production
     depends_on:
       api:

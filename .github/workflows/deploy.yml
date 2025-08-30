@@ -80,7 +80,7 @@ jobs:
           source: compose.prod.yml
           target: ${{ secrets.REMOTE_PATH }}/
 
-      # Bring stack up; then create/enable systemd unit idempotently
+      # Bring stack up; then idempotent systemd unit install/enable
       - name: Deploy (compose up; then idempotent systemd install/enable)
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -92,6 +92,7 @@ jobs:
           command_timeout: 60m
           script: |
             set -euo pipefail
+
             DEPLOY_PATH="${{ secrets.REMOTE_PATH }}"
             DOCKERHUB_NAMESPACE="${{ secrets.DOCKERHUB_NAMESPACE }}"
             SECRET_COOKIE_PASSWORD="${{ secrets.SECRET_COOKIE_PASSWORD }}"
@@ -104,6 +105,22 @@ jobs:
               ls -la "$DEPLOY_PATH" || true
               exit 4
             fi
+
+            # --- error trap for rich diagnostics ---
+            on_err() {
+              code=$?
+              echo "[deploy] FAILED (exit $code). Diagnostics follow..." >&2
+              echo "----- docker ps -a -----" >&2
+              sudo docker ps -a || true
+              echo "----- api logs (last 200) -----" >&2
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200 api || true
+              echo "----- db logs (last 200) -----" >&2
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200 db || true
+              echo "----- migrate:status -----" >&2
+              sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan migrate:status --no-ansi || true
+              exit $code
+            }
+            trap on_err ERR
 
             # Decide TAG from originating event (or manual input)
             if [ "${{ github.event_name }}" = "workflow_run" ]; then
@@ -183,9 +200,9 @@ jobs:
               exit 1
             fi
 
-            # DB migrations + seed (idempotent)
-            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan migrate --force
-            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan db:seed --force || true
+            # DB migrations + seed (idempotent, with clear output)
+            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan migrate --force --no-ansi
+            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan db:seed --force --no-ansi || true
 
             # Record current release for rollback
             echo "$(cat "$DEPLOY_PATH/.release" 2>/dev/null || true)" | sudo tee "$DEPLOY_PATH/.release_prev" >/dev/null
@@ -195,7 +212,6 @@ jobs:
             UNIT_PATH="/etc/systemd/system/clms.service"
             TMP_UNIT="$(mktemp)"
 
-            # Use WorkingDirectory to auto-load ${DEPLOY_PATH}/.env for Compose
             cat > "$TMP_UNIT" <<UNIT
             [Unit]
             Description=CLMS stack (Docker Compose)
@@ -225,18 +241,13 @@ jobs:
             fi
             rm -f "$TMP_UNIT"
 
-            # Enable if not already
             if ! sudo systemctl is-enabled --quiet clms.service; then
               sudo systemctl enable clms.service || true
               CHANGED=1
             fi
 
-            # Start or (re)load without flapping
             if sudo systemctl is-active --quiet clms.service; then
-              # If content changed, prefer reload; fallback to restart
-              if [ "$CHANGED" -eq 1 ]; then
-                sudo systemctl reload clms.service || sudo systemctl restart clms.service || true
-              fi
+              [ "$CHANGED" -eq 1 ] && (sudo systemctl reload clms.service || sudo systemctl restart clms.service || true)
             else
               sudo systemctl start clms.service || true
             fi

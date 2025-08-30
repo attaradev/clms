@@ -1,0 +1,70 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      rollback_to:
+        description: "Target tag (e.g., sha-abc1234) or 'previous'"
+        required: true
+        default: "previous"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Roll back on server (systemd restart with chosen TAG)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            DOCKERHUB_NAMESPACE="${{ secrets.DOCKERHUB_NAMESPACE }}"
+            SECRET_COOKIE_PASSWORD="${{ secrets.SECRET_COOKIE_PASSWORD }}"
+            DEPLOY_PATH="${{ secrets.REMOTE_PATH }}"
+            DOMAIN_NAME="${{ secrets.DOMAIN_NAME }}"
+            [ -z "${DOMAIN_NAME:-}" ] && DOMAIN_NAME="clms.attara.dev"
+            ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
+            [ -z "${ACME_EMAIL:-}" ] && ACME_EMAIL="admin@${DOMAIN_NAME}"
+            TARGET="${{ inputs.rollback_to }}"
+
+            if [ "$TARGET" = "previous" ]; then
+              TARGET_TAG="$(cat "$DEPLOY_PATH/.release_prev" 2>/dev/null || true)"
+            else
+              TARGET_TAG="$TARGET"
+            fi
+            [ -n "${TARGET_TAG:-}" ] || { echo "No rollback target available"; exit 1; }
+
+            echo "Rolling back to TAG=$TARGET_TAG"
+            {
+              echo "DOCKERHUB_NAMESPACE=${DOCKERHUB_NAMESPACE}"
+              echo "TAG=${TARGET_TAG}"
+              echo "SECRET_COOKIE_PASSWORD=${SECRET_COOKIE_PASSWORD:-$(openssl rand -base64 48)}"
+              echo "DOMAIN_NAME=${DOMAIN_NAME}"
+              echo "ACME_EMAIL=${ACME_EMAIL}"
+            } | sudo tee "$DEPLOY_PATH/.env" >/dev/null
+
+            # Restart via systemd; if it fails, try raw compose
+            set +e
+            sudo systemctl restart clms.service
+            rc=$?
+            set -e
+            if [ $rc -ne 0 ]; then
+              echo "[rollback] systemd restart failed (rc=$rc); falling back to raw docker compose up -d"
+              cd "$DEPLOY_PATH"
+              sudo docker compose -f compose.prod.yml up -d
+            fi
+
+            sleep 5
+            sudo systemctl --no-pager status clms.service || true

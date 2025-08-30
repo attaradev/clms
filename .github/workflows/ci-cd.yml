@@ -240,9 +240,9 @@ jobs:
 
             # Run database migrations and seed default admin (idempotent)
             sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
-              docker compose -f compose.prod.yml exec -T php php artisan migrate --force
+              docker compose -f compose.prod.yml exec -T api php artisan migrate --force
             sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
-              docker compose -f compose.prod.yml exec -T php php artisan db:seed --force
+              docker compose -f compose.prod.yml exec -T api php artisan db:seed --force
 
             
             PREV_TAG_FILE="$DEPLOY_PATH/.release"

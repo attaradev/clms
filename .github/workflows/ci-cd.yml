@@ -202,7 +202,7 @@ jobs:
                 "APP_ENV=production" \
                 "APP_KEY=base64:${APP_KEY}" \
                 "APP_DEBUG=false" \
-                "APP_URL=https://${DOMAIN_NAME}" \
+                "APP_URL=http://localhost" \
                 "" \
                 "LOG_CHANNEL=stack" \
                 "LOG_LEVEL=info" \
@@ -225,24 +225,9 @@ jobs:
                 "REDIS_PASSWORD=null" \
                 "REDIS_PORT=6379" \
                 "" \
-                "SANCTUM_STATEFUL_DOMAINS=${DOMAIN_NAME}" \
-                "SESSION_DOMAIN=${DOMAIN_NAME}" \
+                "SANCTUM_STATEFUL_DOMAINS=" \
+                "SESSION_DOMAIN=" \
                 | sudo tee "$DEPLOY_PATH/back-end/.env" > /dev/null
-            fi
-
-            # Ensure APP_URL and domains match the deployed domain (idempotent)
-            if [ -f "$DEPLOY_PATH/back-end/.env" ]; then
-              sudo sed -i -E "s#^APP_URL=.*#APP_URL=https://${DOMAIN_NAME}#" "$DEPLOY_PATH/back-end/.env" || true
-              if grep -q '^SANCTUM_STATEFUL_DOMAINS=' "$DEPLOY_PATH/back-end/.env"; then
-                sudo sed -i -E "s#^SANCTUM_STATEFUL_DOMAINS=.*#SANCTUM_STATEFUL_DOMAINS=${DOMAIN_NAME}#" "$DEPLOY_PATH/back-end/.env" || true
-              else
-                echo "SANCTUM_STATEFUL_DOMAINS=${DOMAIN_NAME}" | sudo tee -a "$DEPLOY_PATH/back-end/.env" >/dev/null
-              fi
-              if grep -q '^SESSION_DOMAIN=' "$DEPLOY_PATH/back-end/.env"; then
-                sudo sed -i -E "s#^SESSION_DOMAIN=.*#SESSION_DOMAIN=${DOMAIN_NAME}#" "$DEPLOY_PATH/back-end/.env" || true
-              else
-                echo "SESSION_DOMAIN=${DOMAIN_NAME}" | sudo tee -a "$DEPLOY_PATH/back-end/.env" >/dev/null
-              fi
             fi
 
             cd "$DEPLOY_PATH"
@@ -253,18 +238,11 @@ jobs:
             sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
               docker compose -f compose.prod.yml up -d --remove-orphans
 
-            # Remove any old containers from the same Compose project that are no longer referenced
-            # This handles transitions to explicit container_name without leaving behind *-1 containers
-            KEEP_IDS=$(sudo docker compose -f compose.prod.yml ps -aq | tr '\n' ' ')
-            for cid in $(sudo docker ps -aq --filter label=com.docker.compose.project=clms); do
-              echo " $KEEP_IDS " | grep -q " $cid " || sudo docker rm -f "$cid" || true
-            done
-
             # Run database migrations and seed default admin (idempotent)
             sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
-              docker compose -f compose.prod.yml exec -T api php artisan migrate --force
+              docker compose -f compose.prod.yml exec -T php php artisan migrate --force
             sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
-              docker compose -f compose.prod.yml exec -T api php artisan db:seed --force
+              docker compose -f compose.prod.yml exec -T php php artisan db:seed --force
 
             
             PREV_TAG_FILE="$DEPLOY_PATH/.release"

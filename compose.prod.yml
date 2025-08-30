@@ -8,6 +8,7 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
+  # --- Next.js frontend (primary site) ---
   web:
     container_name: clms-web
     image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-web:${TAG:-latest}
@@ -22,17 +23,24 @@ services:
       NODE_ENV: production
       SECRET_COOKIE_PASSWORD: ${SECRET_COOKIE_PASSWORD}
     labels:
-      - traefik.enable=true
-      - traefik.http.routers.web.rule=Host(`${DOMAIN_NAME}`)
-      - traefik.http.routers.web.entrypoints=websecure
-      - traefik.http.routers.web.tls.certresolver=le
-      - traefik.http.services.web.loadbalancer.server.port=3000
+      - "traefik.enable=true"
+
+      # Primary domain router (gets real LE cert via 'le' resolver)
+      - "traefik.http.routers.web.rule=Host(`${DOMAIN_NAME}`)"
+      - "traefik.http.routers.web.entrypoints=websecure"
+      - "traefik.http.routers.web.tls=true"
+      - "traefik.http.routers.web.tls.certresolver=le"
+      - "traefik.http.routers.web.tls.domains[0].main=${DOMAIN_NAME}"
+      - "traefik.http.routers.web.service=web"
+      - "traefik.http.services.web.loadbalancer.server.port=3000"
+      - "traefik.http.routers.web.priority=100"
     depends_on:
       proxy:
         condition: service_started
-    networks: 
+    networks:
       - clms
 
+  # --- Nginx reverse proxy (Laravel API) ---
   proxy:
     container_name: clms-proxy
     image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-proxy:${TAG:-latest}
@@ -48,9 +56,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    networks: 
+    networks:
       - clms
 
+  # --- Laravel API ---
   api:
     container_name: clms-api
     image: ${DOCKERHUB_NAMESPACE:-mikeattara}/clms-api:${TAG:-latest}
@@ -84,9 +93,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    networks: 
+    networks:
       - clms
 
+  # --- Traefik reverse proxy + ACME (serves 404 for unknown hosts) ---
   traefik:
     container_name: clms-traefik
     image: traefik:v2.10
@@ -95,16 +105,30 @@ services:
     stop_grace_period: 30s
     logging: *default-logging
     command:
+      # Optional: uncomment for deeper logs while debugging
+      # - --log.level=DEBUG
+
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      # Ensure Traefik talks on this network to reach services
+      - --providers.docker.network=clms_prod
+
+      # File provider for default TLS cert (self-signed fallback)
+      - --providers.file.directory=/dynamic
+      - --providers.file.watch=true
+
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.traefik.address=:8080
       - --api.dashboard=true
       - --ping=true
       - --ping.entryPoint=traefik
+
+      # Global HTTP -> HTTPS redirect; HTTPS with no matching router returns 404
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
+
+      # ACME (Let's Encrypt) for automatic certs (used by the primary 'web' router)
       - --certificatesresolvers.le.acme.httpchallenge=true
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
       - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
@@ -116,9 +140,11 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
-    networks: 
+      - ./dynamic:/dynamic:ro
+    networks:
       - clms
 
+  # --- Postgres ---
   db:
     container_name: clms-db
     image: postgres:16
@@ -136,9 +162,10 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: 
+    networks:
       - clms
 
+  # --- Redis ---
   redis:
     container_name: clms-redis
     image: redis:7-alpine
@@ -151,7 +178,7 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
-    networks: 
+    networks:
       - clms
 
 volumes:

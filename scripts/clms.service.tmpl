@@ -1,0 +1,18 @@
+[Unit]
+Description=CLMS stack (Docker Compose)
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=${DEPLOY_PATH}
+ExecStartPre=/usr/bin/test -f ${COMPOSE_FILE}
+ExecStart=/usr/bin/docker compose -f ${COMPOSE_FILE} up -d
+ExecReload=/usr/bin/docker compose -f ${COMPOSE_FILE} up -d
+ExecStop=/usr/bin/docker compose -f ${COMPOSE_FILE} down
+RemainAfterExit=true
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

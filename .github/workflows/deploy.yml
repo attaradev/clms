@@ -1,0 +1,257 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (must match a GitHub Environment)"
+        required: false
+        default: "production"
+      ref:
+        description: "Git ref to deploy (SHA or tag). Optional for manual runs"
+        required: false
+  workflow_run:
+    workflows: [ "Build & Push Images" ]
+    types: [ completed ]
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare remote path (dirs, ACME, TLS fallback)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ secrets.REMOTE_PATH }}"
+            sudo mkdir -p "$DEPLOY_PATH" "$DEPLOY_PATH/back-end" "$DEPLOY_PATH/letsencrypt" "$DEPLOY_PATH/dynamic" "$DEPLOY_PATH/systemd"
+            REMOTE_USER="$(id -un)"
+            sudo chown -R "$REMOTE_USER":"$REMOTE_USER" "$DEPLOY_PATH" || true
+            sudo chmod -R u+rwX,go+rX "$DEPLOY_PATH" || true
+
+            sudo touch "$DEPLOY_PATH/letsencrypt/acme.json"
+            sudo chmod 600 "$DEPLOY_PATH/letsencrypt/acme.json" || true
+
+            if [ ! -f "$DEPLOY_PATH/dynamic/default.crt" ] || [ ! -f "$DEPLOY_PATH/dynamic/default.key" ]; then
+              openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+                -subj "/CN=default.local" \
+                -keyout "$DEPLOY_PATH/dynamic/default.key" \
+                -out "$DEPLOY_PATH/dynamic/default.crt"
+            fi
+            if [ ! -f "$DEPLOY_PATH/dynamic/tls.yml" ]; then
+              printf "%s\n" \
+                "tls:" \
+                "  certificates:" \
+                "    - certFile: /dynamic/default.crt" \
+                "      keyFile: /dynamic/default.key" \
+                | sudo tee "$DEPLOY_PATH/dynamic/tls.yml" >/dev/null
+            fi
+
+      - name: Upload compose + unit template
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          overwrite: true
+          source: "compose.prod.yml,scripts/clms.service.tmpl"
+          target: ${{ secrets.REMOTE_PATH }}/
+
+      - name: Verify uploaded files
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script: |
+            set -euo pipefail
+            DEPLOY_PATH="${{ secrets.REMOTE_PATH }}"
+            test -s "$DEPLOY_PATH/compose.prod.yml"
+            test -s "$DEPLOY_PATH/systemd/clms.service.tmpl"
+            ls -la "$DEPLOY_PATH/compose.prod.yml" "$DEPLOY_PATH/systemd/clms.service.tmpl"
+
+      - name: Deploy (compose up; then idempotent systemd install/enable)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script_stop: true
+          command_timeout: 60m
+          script: |
+            set -Eeuo pipefail
+            set -x
+
+            DEPLOY_PATH="${{ secrets.REMOTE_PATH }}"
+            DOCKERHUB_NAMESPACE="${{ secrets.DOCKERHUB_NAMESPACE }}"
+            SECRET_COOKIE_PASSWORD="${{ secrets.SECRET_COOKIE_PASSWORD }}"
+            DOMAIN_NAME="${{ secrets.DOMAIN_NAME }}"
+            : "${DOMAIN_NAME:=clms.attara.dev}"
+
+            ACME_EMAIL="${{ secrets.ACME_EMAIL }}"
+            : "${ACME_EMAIL:=admin@${DOMAIN_NAME}}"
+
+            COMPOSE_FILE="$DEPLOY_PATH/compose.prod.yml"
+            if [ ! -f "$COMPOSE_FILE" ]; then
+              echo "[deploy] ERROR: $COMPOSE_FILE not found"; ls -la "$DEPLOY_PATH" || true; exit 4
+            fi
+
+            on_err() {
+              code=$?
+              echo "[deploy] FAILED (exit $code). Diagnostics..." >&2
+              sudo docker compose -f "$COMPOSE_FILE" config || true
+              sudo docker compose -f "$COMPOSE_FILE" ps || true
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=150 traefik || true
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200 api || true
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=100 db || true
+              sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan migrate:status --no-ansi || true
+              sudo systemctl cat clms.service || true
+              sudo systemctl status clms.service --no-pager || true
+              exit $code
+            }
+            trap on_err ERR
+
+            if [ "${{ github.event_name }}" = "workflow_run" ]; then
+              GIT_REF="${{ github.event.workflow_run.head_sha }}"
+            else
+              GIT_REF="${{ inputs.ref != '' && inputs.ref || github.sha }}"
+            fi
+            SHORT_SHA="$(echo "$GIT_REF" | cut -c1-7)"
+            TAG="sha-${SHORT_SHA}"
+
+            : "${SECRET_COOKIE_PASSWORD:=$(openssl rand -base64 48)}"
+            {
+              echo "DOCKERHUB_NAMESPACE=${DOCKERHUB_NAMESPACE}"
+              echo "TAG=${TAG}"
+              echo "SECRET_COOKIE_PASSWORD=${SECRET_COOKIE_PASSWORD}"
+              echo "DOMAIN_NAME=${DOMAIN_NAME}"
+              echo "ACME_EMAIL=${ACME_EMAIL}"
+            } | sudo tee "$DEPLOY_PATH/.env" >/dev/null
+
+            if [ ! -f "$DEPLOY_PATH/back-end/.env" ]; then
+              APP_KEY="$(head -c 32 /dev/urandom | base64 2>/dev/null || openssl rand -base64 32)"
+              cat > "$DEPLOY_PATH/back-end/.env" <<EOF
+              APP_NAME=CLMS
+              APP_ENV=production
+              APP_KEY=base64:${APP_KEY}
+              APP_DEBUG=false
+              APP_URL=http://localhost
+              LOG_CHANNEL=stack
+              LOG_LEVEL=info
+              DB_CONNECTION=pgsql
+              DB_HOST=db
+              DB_PORT=5432
+              DB_DATABASE=clms
+              DB_USERNAME=clms
+              DB_PASSWORD=clms
+              QUEUE_CONNECTION=database
+              REDIS_HOST=redis
+              REDIS_PASSWORD=null
+              REDIS_PORT=6379
+              EOF
+            fi
+
+            cd "$DEPLOY_PATH"
+            sudo docker compose -f "$COMPOSE_FILE" config -q
+            sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
+              docker compose -f "$COMPOSE_FILE" pull || true
+            sudo env DOCKERHUB_NAMESPACE="$DOCKERHUB_NAMESPACE" TAG="$TAG" SECRET_COOKIE_PASSWORD="$SECRET_COOKIE_PASSWORD" DOMAIN_NAME="$DOMAIN_NAME" \
+              docker compose -f "$COMPOSE_FILE" up -d --remove-orphans
+
+            echo "[deploy] waiting for api container..."
+            set +e
+            has_json=1
+            sudo docker compose -f "$COMPOSE_FILE" ps --format json >/dev/null 2>&1 || has_json=0
+            for _ in $(seq 1 24); do
+              if [ "$has_json" -eq 1 ]; then
+                sudo docker compose -f "$COMPOSE_FILE" ps --format json | grep -q '"Name":"clms-api"' && break
+              else
+                sudo docker ps --format '{{.Names}}' | grep -q '^clms-api$' && break
+              fi
+              sleep 5
+            done
+
+            echo "[deploy] waiting for api to become healthy..."
+            ok=0
+            for _ in $(seq 1 24); do
+              STATUS="$(sudo docker inspect --format='{{json .State.Health.Status}}' clms-api 2>/dev/null | tr -d '"')"
+              if [ "$STATUS" = "healthy" ]; then ok=1; break; fi
+              sleep 5
+            done
+            set -e
+            if [ "$ok" != 1 ]; then
+              echo "[deploy] API not healthy"
+              sudo docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200 api || true
+              exit 1
+            fi
+
+            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan migrate --force --no-ansi
+            sudo docker compose -f "$COMPOSE_FILE" exec -T api php artisan db:seed --force --no-ansi || true
+
+            echo "$(cat "$DEPLOY_PATH/.release" 2>/dev/null || true)" | sudo tee "$DEPLOY_PATH/.release_prev" >/dev/null
+            echo "$TAG" | sudo tee "$DEPLOY_PATH/.release" >/dev/null
+
+            command -v envsubst >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y gettext-base; }
+            UNIT_TPL="$DEPLOY_PATH/systemd/clms.service.tmpl"
+            UNIT_PATH="/etc/systemd/system/clms.service"
+            export DEPLOY_PATH COMPOSE_FILE
+
+            if [ ! -s "$UNIT_TPL" ]; then
+              echo "[deploy] ERROR: unit template missing at $UNIT_TPL"
+              exit 7
+            fi
+
+            if [ -f "$UNIT_PATH" ] && grep -q 'DRONE_SSH_PREV_COMMAND_EXIT_CODE' "$UNIT_PATH"; then
+              sudo rm -f "$UNIT_PATH"
+            fi
+
+            TMP_GEN="$(mktemp)"; envsubst < "$UNIT_TPL" > "$TMP_GEN"
+            CHANGED=0
+            if [ ! -f "$UNIT_PATH" ] || ! cmp -s "$TMP_GEN" "$UNIT_PATH"; then
+              sudo install -m 0644 "$TMP_GEN" "$UNIT_PATH"
+              sudo systemctl daemon-reload
+              CHANGED=1
+            fi
+            rm -f "$TMP_GEN"
+
+            if ! sudo systemctl is-enabled --quiet clms.service; then
+              sudo systemctl enable clms.service || true
+              CHANGED=1
+            fi
+
+            if sudo systemctl is-active --quiet clms.service; then
+              if [ "$CHANGED" -eq 1 ]; then
+                sudo systemctl reload clms.service || sudo systemctl restart clms.service || true
+              fi
+            else
+              sudo systemctl start clms.service || true
+            fi
+
+            sudo docker image prune -f || true
+
+            trap - ERR
+            set +e
+            echo "[deploy] SUCCESS"
+            exit 0
